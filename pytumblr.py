@@ -1,4 +1,4 @@
-__version__='0.0.1'
+__version__='0.1.0'
 __doc__="pyTumblr %s - http://github.com/molotov/pytumblr" % __version__
 
 
@@ -66,12 +66,12 @@ def _x(s=None):
     import pdb; pdb.set_trace()
 
 
-###
-
-
 class Post(object):
     """
     A tumblr post. Can have text/video/audio/images related to it.
+    
+    _attrs: A list of xml attributes to extract from each post. Other common
+        post data (such as tags) are manually pulled out during initialization.
     """
     _attrs = [
         'date',
@@ -87,17 +87,36 @@ class Post(object):
     ]
     
     def __init__(self, post):
+        # store this post for inspection later.
         self.__post = post
+        
         # grab common attributes
         self.attrs = {}
         for k in self._attrs:
             self.attrs[k] = post.getAttribute(k)
         
+        # handle tags
+        tags = post.getElementsByTagName('tag')
+        self.attrs['tags'] = []
+        for tag in tags:
+            self.attrs['tags'].append(val(tag))
+            
+        # let subclassing objects parse their own things.
         self.parse(post)
         
     def parse(self, node):
         """
         Subclasses must implement parse for the xml node passed in.
+        
+        @param node: The xml node.
+        @type node: <DOM Element>
+        """
+        raise NotImplementedError()
+    
+    def to_dict(self):
+        """
+        This is called when the post is being cast to a dictionary on it's way
+        to being sent to Tumblr. This must be implemented by subclasses.
         """
         raise NotImplementedError()
         
@@ -109,14 +128,18 @@ class Post(object):
         Casting to a dict will be used when creating http POST requests.
         
         This base class provides some meta information, but note that it does
-        not provide current 'date' functionality.
+        not provide current 'date' functionality. 
         """
         d = self.to_dict()
+        
+        # Tumblr api at this time does not provide for sending the 
+        # 'Let people photo reply' option.
         meta = {
             'generator':__doc__,
             'date': self.attrs['date'],
             'format': self.attrs['format'],
-            'type':self.type,
+            'type': self.type,
+            'tags': ','.join(self.attrs['tags']),
         }
         d.update(meta)
         return d
@@ -218,8 +241,30 @@ class PhotoPost(Post):
         urls = node.getElementsByTagName('photo-url')
         self.urls = {}
         
+        # this sets up the urls for a photo, not sure why the API returns
+        # <photo-url> as well as <photo-set>
         for url in urls:
             self.urls[url.getAttribute('max-width')] = val(url)
+            
+        # handle the case where there is a photo-set
+        self.photos = []
+        photo_set = node.getElementsByTagName('photoset')
+        for photo in photo_set:
+            photo_urls = photo.getElementsByTagName('photo-url')
+            url = None
+            for inner_url in photo_urls:
+                # the tumblr xml returns 1280, 500, 400, 250, 100, 75 max-width
+                # I'm gonna assume that 1280 is the original image and not
+                # worry about messing with the others...
+                # Dear Future Self, I hate you. Sincerely, Past Self.
+                if inner_url.getAttribute('max-width') == 1280:
+                    url = val(inner_url)
+                    break
+            photo = {
+                'caption':photo.getAttribute('caption'),
+                'url':url
+            }
+            self.photos.append(photo)
     
     def to_dict(self):
         """
@@ -370,7 +415,8 @@ class Blog(object):
         self.post_queue = Queue()
     
     def add_post(self, post):
-        print 'Adding post: %s' % post.__class__.__name__
+        import pdb; pdb.set_trace()
+        print 'Adding post: %s' % post
         self.post_queue.put(post)
     
     def post_count(self):
@@ -640,7 +686,7 @@ if __name__=='__main__':
     
     # for now since this is a very specific use-case, I'm just saving when 
     # I copy them.
-    api.copy_from_to(src_account, src_blog, dest_account, dest_blog)
+    #api.copy_from_to(src_account, src_blog, dest_account, dest_blog)
     
     # api.save() will be able to easily be scaled.
     # api.save(src_blog)
