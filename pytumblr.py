@@ -7,6 +7,8 @@ from urllib import urlopen
 from urllib import urlencode
 from unicodedata import normalize
 import time
+from getpass import getpass
+from urlparse import urlparse
 from Queue import Queue
 
 
@@ -89,6 +91,7 @@ class Post(object):
     def __init__(self, post):
         # store this post for inspection later.
         self.__post = post
+        print post.toprettyxml()
         
         # grab common attributes
         self.attrs = {}
@@ -182,6 +185,7 @@ class LinkPost(Post):
         """
         self.text = val(get_node(node, 'link-text'))
         self.url = val(get_node(node, 'link-url'))
+        self.description = val(get_node(node, 'link-description'))
     
     def to_dict(self):
         """
@@ -195,10 +199,15 @@ class LinkPost(Post):
         Also, yes the api/read version is called 'link-text' and the api/write
         version expects 'name'. Odd.
         """
-        return {
-            'name': self.text,
-            'url': self.url,
+        d = {
+            'url':self.url
         }
+        if self.text:
+            d['name'] = self.text
+        if self.description:
+            d['description'] = self.description
+            
+        return d
 
 
 class QuotePost(Post):
@@ -220,10 +229,13 @@ class QuotePost(Post):
         quote
         source (optional, HTML allowed)
         """
-        return {
+        d = {
             'quote':self.text,
-            'source':self.source,
         }
+        if self.source:
+            d['source'] = self.source
+
+        return d
 
 
 class PhotoPost(Post):
@@ -237,14 +249,23 @@ class PhotoPost(Post):
             ...
         </post>
         """
+        
         self.caption = val(get_node(node, 'photo-caption'))
+        self.link_url = val(get_node(node, 'photo-link-url'))
         urls = node.getElementsByTagName('photo-url')
         self.urls = {}
         
         # this sets up the urls for a photo, not sure why the API returns
         # <photo-url> as well as <photo-set>
         for url in urls:
-            self.urls[url.getAttribute('max-width')] = val(url)
+            _url = val(url)
+            parsed = urlparse(_url)
+            if parsed.netloc.endswith('tumblr.com'):
+                url_check = urlopen(_url)
+                _url = url_check.geturl()
+                print 'resetting url to: %s' % _url
+                
+            self.urls[int(url.getAttribute('max-width'))] = _url
             
         # handle the case where there is a photo-set
         self.photos = []
@@ -280,11 +301,15 @@ class PhotoPost(Post):
         caption (optional, HTML allowed)
         click-through-url (optional)
         """
-        return {
-            'source': self.urls[max(self.urls)],
-            'caption': self.caption,
-            'click-through-url': None
+        d = {
+            'source': self.urls[max([int(i) for i in self.urls.keys()])],
         }
+        if self.caption:
+            d['caption'] = self.caption
+        if self.link_url:
+            d['click-through-url'] = self.link_url
+            
+        return d
 
 
 class ConversationPost(Post):
@@ -320,7 +345,7 @@ class ConversationPost(Post):
         """
         return {
             'title':self.title,
-            'text':self.text,
+            'conversation':self.text,
         }
 
 
@@ -415,8 +440,7 @@ class Blog(object):
         self.post_queue = Queue()
     
     def add_post(self, post):
-        import pdb; pdb.set_trace()
-        print 'Adding post: %s' % post
+        print 'Adding post: %s' % post  
         self.post_queue.put(post)
     
     def post_count(self):
@@ -631,6 +655,7 @@ class PyTumblr(object):
             if self.last_response.code != 201:
                 print 'Copy for post failed, requeing.'
                 src_blog.add_post(post)
+                import pdb; pdb.set_trace()
             else:
                 print 'Posted %s post. %s of %s (took %ss)' % (request['type'], post_count, total, stop_time-start_time)
         end_time = time.time()
@@ -645,12 +670,12 @@ if __name__=='__main__':
     api = PyTumblr()
     
     src_email = raw_input('Source account email: ')
-    src_pass = raw_input('Source account password: ')
+    src_pass = getpass('Source account password: ')
     src_account = Account(src_email, src_pass)
     api.authenticate(src_account)
     
     dest_email = raw_input('Destination account email: ')
-    dest_pass = raw_input('Destination account password: ')
+    dest_pass = getpass('Destination account password: ')
     dest_account = Account(dest_email, dest_pass)
     api.authenticate(dest_account)
     
@@ -686,14 +711,5 @@ if __name__=='__main__':
     
     # for now since this is a very specific use-case, I'm just saving when 
     # I copy them.
-    #api.copy_from_to(src_account, src_blog, dest_account, dest_blog)
-    
-    # api.save() will be able to easily be scaled.
-    # api.save(src_blog)
-    
-    # begin copying over
-    
-    # yielding posts will be fast, probably.
-    # for post in src_blog:
-    #     # reposting the posts will be slower. These need to be async.
-    #     dest_blog.post(post)
+    api.copy_from_to(src_account, src_blog, dest_account, dest_blog)
+
